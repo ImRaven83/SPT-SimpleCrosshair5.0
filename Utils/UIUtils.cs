@@ -1,32 +1,27 @@
-using BepInEx.Configuration;
-using DG.Tweening;
+using BepInEx;
+using BepInEx.Unity.IL2CPP.Configuration;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace SimpleCrosshair.Utils
 {
     public static class UIUtils
     {
+        // under il2cpp, `transform as RectTransform` doesn't work since the wrapper is a Transform, so TryCast instead
         public static RectTransform GetRectTransform(this GameObject gameObject)
         {
-            return gameObject.transform as RectTransform;
+            return gameObject.transform.TryCast<RectTransform>();
         }
 
         public static RectTransform GetRectTransform(this Component component)
         {
-            return component.transform as RectTransform;
+            return component.transform.TryCast<RectTransform>();
         }
 
         public static void ResetTransform(this GameObject gameObject)
         {
             gameObject.transform.localPosition = Vector3.zero;
             gameObject.transform.localRotation = Quaternion.identity;
-		    gameObject.transform.localScale = Vector3.one;
-        }
-
-        public static Tween TweenColor(this Image image, Color to, float duration)
-        {
-            return DOTween.To(() => image.color, c => image.color = c, to, duration);
+            gameObject.transform.localScale = Vector3.one;
         }
 
         /// <summary>
@@ -34,14 +29,14 @@ namespace SimpleCrosshair.Utils
         /// </summary>
         public static bool BetterIsPressed(this KeyboardShortcut key)
         {
-            if (!Input.GetKey(key.MainKey))
+            if (!UnityInput.Current.GetKey(key.MainKey))
             {
                 return false;
             }
 
             foreach (var modifier in key.Modifiers)
             {
-                if (!Input.GetKey(modifier))
+                if (!UnityInput.Current.GetKey(modifier))
                 {
                     return false;
                 }

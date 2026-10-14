@@ -1,7 +1,9 @@
-﻿using System.Reflection;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Logging;
+using BepInEx.Unity.IL2CPP;
 using EFT.UI;
+using Il2CppInterop.Runtime.Injection;
 using SimpleCrosshair.Config;
 using SimpleCrosshair.Patches;
 using UnityEngine;
@@ -10,22 +12,24 @@ namespace SimpleCrosshair
 {
     // the version number here is generated on build and may have a warning if not yet built
     [BepInPlugin("com.mpstark.SimpleCrosshair", "SimpleCrosshair", BuildInfo.Version)]
-    public class Plugin : BaseUnityPlugin
+    public class Plugin : BasePlugin
     {
         public static Plugin Instance;
-        public static ManualLogSource Log => Instance.Logger;
+        public static ManualLogSource Logger => Instance.Log;
         public static string Path = System.IO.Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
 
         public GameObject SimpleCrosshairGO { get; private set; }
         public SimpleCrosshairComponent SimpleCrosshairComponent { get; private set; }
 
-        internal void Awake()
+        public override void Load()
         {
+            Instance = this;
+
             Settings.Init(Config);
             Config.SettingChanged += (x, y) => SimpleCrosshairComponent?.ReadConfig();
 
-            Instance = this;
-            DontDestroyOnLoad(this);
+            // custom MonoBehaviours have to be registered with il2cpp before they can be added to a GameObject
+            ClassInjector.RegisterTypeInIl2Cpp<SimpleCrosshairComponent>();
 
             // patches
             new BattleUIScreenShowPatch().Enable();
@@ -63,7 +67,10 @@ namespace SimpleCrosshair
         /// </summary>
         internal void DestroyCrosshair()
         {
-            Destroy(SimpleCrosshairGO);
+            if (SimpleCrosshairGO != null)
+            {
+                Object.Destroy(SimpleCrosshairGO);
+            }
 
             SimpleCrosshairGO = null;
             SimpleCrosshairComponent = null;

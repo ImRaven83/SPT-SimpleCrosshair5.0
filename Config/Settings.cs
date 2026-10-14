@@ -1,7 +1,10 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using BepInEx.Configuration;
+using BepInEx.Unity.IL2CPP.Configuration;
 using UnityEngine;
 
 // THIS IS HEAVILY BASED ON DRAKIAXYZ'S SPT-QuickMoveToContainer
@@ -35,6 +38,8 @@ namespace SimpleCrosshair.Config
         public static void Init(ConfigFile Config)
         {
             Settings.Config = Config;
+
+            RegisterColorConverter();
 
             // get all png images in directory
             var customFiles = Directory.EnumerateFiles(Plugin.Path, "*.*", SearchOption.AllDirectories)
@@ -171,6 +176,51 @@ namespace SimpleCrosshair.Config
                     new ConfigurationManagerAttributes { })));
 
             RecalcOrder();
+        }
+
+        /// <summary>
+        /// BepInEx 6 IL2CPP doesn't ship a Color converter, so register one using the same RRGGBBAA hex
+        /// format that BepInEx 5 used, so that existing config files keep working
+        /// </summary>
+        private static void RegisterColorConverter()
+        {
+            if (TomlTypeConverter.CanConvert(typeof(Color)))
+            {
+                return;
+            }
+
+            TomlTypeConverter.AddConverter(typeof(Color), new TypeConverter
+            {
+                ConvertToString = (obj, type) =>
+                {
+                    var color = (Color)obj;
+                    return string.Concat(ToHexByte(color.r), ToHexByte(color.g), ToHexByte(color.b), ToHexByte(color.a));
+                },
+                ConvertToObject = (str, type) =>
+                {
+                    var hex = str.Trim().TrimStart('#');
+                    if ((hex.Length != 6 && hex.Length != 8) ||
+                        !uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var value))
+                    {
+                        throw new FormatException($"Invalid color string, expected hex RRGGBBAA: {str}");
+                    }
+
+                    if (hex.Length == 6)
+                    {
+                        value = (value << 8) | 0xFF;
+                    }
+
+                    return new Color(((value >> 24) & 0xFF) / 255f,
+                                     ((value >> 16) & 0xFF) / 255f,
+                                     ((value >> 8) & 0xFF) / 255f,
+                                     (value & 0xFF) / 255f);
+                }
+            });
+        }
+
+        private static string ToHexByte(float channel)
+        {
+            return ((byte)Mathf.Clamp(Mathf.RoundToInt(channel * 255f), 0, 255)).ToString("X2", CultureInfo.InvariantCulture);
         }
 
         private static void RecalcOrder()

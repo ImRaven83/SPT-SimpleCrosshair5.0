@@ -38,7 +38,21 @@ Hey, it's better than a monitor crosshair or an overlay one!
 
 ## Installation
 
-[Releases are here](https://github.com/mpstark/SPT-SimpleCrosshair/releases). Open zip file and drag `BepInEx` folder into root of your SPT-AKI install.
+Requires SPT 5.0 (EFT on IL2CPP with BepInEx 6). Versions 1.x of this mod are for SPT 4.x and older.
+
+[Releases are here](https://github.com/mpstark/SPT-SimpleCrosshair/releases). Open zip file and drag `BepInEx` folder into root of your SPT install.
+
+## Building
+
+Requires the .NET 10 SDK. The project references the Il2CppInterop-generated game assemblies, so the game must have been launched at least once with BepInEx so that `BepInEx\interop` is populated.
+
+By default the project expects to live two folders deep inside the SPT install (e.g. `SPT\Dev\SPT-SimpleCrosshair`). Otherwise, point it at your install:
+
+```
+dotnet build -c Release -p:TarkovDir=C:\path\to\SPT\
+```
+
+The individual folders can also be overridden with `TarkovBepInExCoreDir`, `TarkovInteropDir` and `TarkovBepInExSptDir`.
 
 ## License
 

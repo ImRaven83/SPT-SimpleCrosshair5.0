@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using BepInEx.Configuration;
-using DG.Tweening;
+using BepInEx.Unity.IL2CPP.Configuration;
 using EFT;
 using EFT.UI;
+using Il2CppInterop.Runtime.Attributes;
 using SimpleCrosshair.Config;
 using SimpleCrosshair.Utils;
 using UnityEngine;
@@ -32,11 +32,13 @@ namespace SimpleCrosshair
             EPlayerState.Sprint,
             EPlayerState.BreachDoor,
         };
-        private readonly static HashSet<Type> HandControllersToShowWith = new HashSet<Type>()
+
+        // il2cpp wrappers are created as the declared type, so check the actual il2cpp type with TryCast
+        private readonly static Func<Player.AbstractHandsController, bool>[] HandControllersToShowWith =
         {
-            typeof(Player.FirearmController),
-            typeof(Player.BaseKnifeController),
-            typeof(Player.BaseGrenadeHandsController),
+            c => c.TryCast<Player.FirearmController>() != null,
+            c => c.TryCast<Player.BaseKnifeController>() != null,
+            c => c.TryCast<Player.BaseGrenadeHandsController>() != null,
         };
 
         private Image _crosshairImage;
@@ -70,10 +72,35 @@ namespace SimpleCrosshair
         private Canvas _cachedCanvas;
         private Camera _cachedCamera;
 
+        // il2cpp delegates for player events, kept so they can be unsubscribed again
+        private Il2CppSystem.Action<Player.AbstractHandsController, Player.AbstractHandsController> _handsControllerChangedHandler;
+        private Il2CppSystem.Action<bool> _senseChangedHandler;
+        private Il2CppSystem.Action _possibleInteractionsChangedHandler;
+        private Il2CppSystem.Action<bool> _aimingChangedHandler;
+
+        // color fade tween state
+        private bool _isFading;
+        private Color _fadeFromColor;
+        private Color _fadeToColor;
+        private float _fadeElapsed;
+        private bool _fadeToVisible;
+
+        // dynamic position smoothing state
+        private bool _hasTargetAnchorPosition;
+        private Vector2 _targetAnchorPosition;
+        private Vector2 _anchorPositionVelocity;
+
+        public SimpleCrosshairComponent(IntPtr pointer) : base(pointer)
+        {
+        }
+
+        [HideFromIl2Cpp]
         public static GameObject AttachToBattleUIScreen(EftBattleUIScreen screen)
         {
             // setup container
-            var go = new GameObject("SimpleCrosshair", typeof(RectTransform), typeof(CanvasRenderer));
+            var go = new GameObject("SimpleCrosshair");
+            go.AddComponent<RectTransform>();
+            go.AddComponent<CanvasRenderer>();
             go.layer = screen.gameObject.layer;
             go.transform.SetParent(screen.transform);
             go.transform.localScale = Vector3.one;
@@ -87,7 +114,7 @@ namespace SimpleCrosshair
             return go;
         }
 
-        private void Awake()
+        public void Awake()
         {
             // create our image component that will hold the crosshair loaded from config
             _crosshairImage = gameObject.AddComponent<Image>();
@@ -103,17 +130,24 @@ namespace SimpleCrosshair
             ReadConfig();
         }
 
+        [HideFromIl2Cpp]
         private Sprite LoadSprite(string texturePath)
         {
             var texture = TextureUtils.LoadTexture2DFromPath(texturePath);
             var sprite = Sprite.Create(texture,
                                        new Rect(0f, 0f, texture.width, texture.height),
                                        new Vector2(texture.width / 2, texture.height / 2));
+
+            // don't let unity unload the sprite on scene changes, we cache it
+            sprite.hideFlags = HideFlags.DontUnloadUnusedAsset;
             return sprite;
         }
 
         public void Update()
         {
+            UpdateFade();
+            UpdateDynamicPosition();
+
             // handle keyboard shortcuts
             if (_keybindBehavior == EKeybindBehavior.DoNothing || _keyboardShortcut.MainKey == KeyCode.None)
             {
@@ -151,6 +185,7 @@ namespace SimpleCrosshair
             CalculateDynamicAimPoint();
         }
 
+        [HideFromIl2Cpp]
         public void ReadConfig()
         {
             // general
@@ -205,12 +240,14 @@ namespace SimpleCrosshair
             }
         }
 
+        [HideFromIl2Cpp]
         public void SetReasonToHide(string reason, bool shouldHide)
         {
             _reasonsToHide[reason] = shouldHide;
             SetVisibility(!_reasonsToHide.Any((pair) => pair.Value));
         }
 
+        [HideFromIl2Cpp]
         private void SetVisibility(bool newVisible, bool shouldTween = true, bool force = false)
         {
             if (_visible == newVisible && !force)
@@ -219,13 +256,18 @@ namespace SimpleCrosshair
             }
 
             var toColor = new Color(_color.r, _color.g, _color.b, newVisible ? _color.a : 0);
-            if (shouldTween)
+            if (shouldTween && _fadeInOutTime > 0f)
             {
-                // tween fade the crosshair in/out
-                _crosshairImage.TweenColor(toColor, _fadeInOutTime).OnComplete(() => _laggingVisible = newVisible);
+                // tween fade the crosshair in/out, see UpdateFade
+                _isFading = true;
+                _fadeFromColor = _crosshairImage.color;
+                _fadeToColor = toColor;
+                _fadeElapsed = 0f;
+                _fadeToVisible = newVisible;
             }
             else
             {
+                _isFading = false;
                 _crosshairImage.color = toColor;
                 _laggingVisible = newVisible;
             }
@@ -233,6 +275,61 @@ namespace SimpleCrosshair
             _visible = newVisible;
         }
 
+        [HideFromIl2Cpp]
+        private void UpdateFade()
+        {
+            if (!_isFading)
+            {
+                return;
+            }
+
+            _fadeElapsed += Time.unscaledDeltaTime;
+            var t = Mathf.Clamp01(_fadeElapsed / _fadeInOutTime);
+
+            // ease out quad, same as the old DOTween default
+            var eased = 1f - (1f - t) * (1f - t);
+            _crosshairImage.color = Color.LerpUnclamped(_fadeFromColor, _fadeToColor, eased);
+
+            if (t >= 1f)
+            {
+                _isFading = false;
+                _laggingVisible = _fadeToVisible;
+            }
+        }
+
+        [HideFromIl2Cpp]
+        private void UpdateDynamicPosition()
+        {
+            if (!_hasTargetAnchorPosition)
+            {
+                return;
+            }
+
+            var rectTransform = _crosshairImage.GetRectTransform();
+            if (_dynamicPositionSmoothTime <= 0f)
+            {
+                rectTransform.anchoredPosition = _targetAnchorPosition;
+                _hasTargetAnchorPosition = false;
+                return;
+            }
+
+            rectTransform.anchoredPosition = Vector2.SmoothDamp(rectTransform.anchoredPosition,
+                                                                _targetAnchorPosition,
+                                                                ref _anchorPositionVelocity,
+                                                                _dynamicPositionSmoothTime,
+                                                                float.PositiveInfinity,
+                                                                Time.unscaledDeltaTime);
+        }
+
+        [HideFromIl2Cpp]
+        private void SetAnchorPositionImmediate(Vector2 position)
+        {
+            _hasTargetAnchorPosition = false;
+            _anchorPositionVelocity = Vector2.zero;
+            _crosshairImage.GetRectTransform().anchoredPosition = position;
+        }
+
+        [HideFromIl2Cpp]
         private void CalculateDynamicAimPoint(bool shouldTween = true)
         {
             if (_cachedPlayer == null)
@@ -251,7 +348,7 @@ namespace SimpleCrosshair
             // do raycast, if it hits, use that as aim point, if not, use end of ray
             var ray = new Ray(rayBegin, rayDirection);
             var rayEnd = rayBegin + rayDirection.normalized * _dynamicPositionAimDistance;
-			var didRayHit = Physics.Raycast(
+            var didRayHit = Physics.Raycast(
                 ray, out RaycastHit rayHit, _dynamicPositionAimDistance, LayersMaskController.HighPolyWithTerrainMask);
 
             var worldAimPoint = didRayHit ? rayHit.point : rayEnd;
@@ -261,11 +358,13 @@ namespace SimpleCrosshair
             // check visibility status before tweening so that if the player can't see it, it doesn't tween
             if (shouldTween && (_visible || _laggingVisible))
             {
-                _crosshairImage.GetRectTransform().DOAnchorPos(screenAimPoint + _offset, _dynamicPositionSmoothTime);
+                // smoothed towards in UpdateDynamicPosition
+                _targetAnchorPosition = screenAimPoint + _offset;
+                _hasTargetAnchorPosition = true;
             }
             else
             {
-                _crosshairImage.GetRectTransform().anchoredPosition = screenAimPoint + _offset;
+                SetAnchorPositionImmediate(screenAimPoint + _offset);
             }
 
             // lastly, do center radius handling
@@ -294,12 +393,13 @@ namespace SimpleCrosshair
             }
         }
 
+        [HideFromIl2Cpp]
         private void ResetToStaticAimPoint()
         {
-            DOTween.Kill(_crosshairImage.GetRectTransform());
-            _crosshairImage.GetRectTransform().anchoredPosition = _offset;
+            SetAnchorPositionImmediate(_offset);
         }
 
+        [HideFromIl2Cpp]
         private Vector2 GetCanvasScreenPosition(Vector3 worldPoint)
         {
             var canvasRect = _cachedCanvas.GetRectTransform().parent.GetRectTransform(); // Workaround to get a valid sizeDelta
@@ -309,19 +409,31 @@ namespace SimpleCrosshair
                 (viewportPoint.y * canvasRect.sizeDelta.y) - (canvasRect.sizeDelta.y * 0.5f));
         }
 
+        [HideFromIl2Cpp]
         internal void OnRegisterMainPlayer()
         {
             if (!GameUtils.IsGameActive) return;
             var player = GameUtils.Player;
+            if (player == null) return;
+
+            // if we were already registered (e.g. from Awake and the patch), don't double subscribe
+            if (_cachedPlayer != null)
+            {
+                UnsubscribeFromPlayer(_cachedPlayer);
+            }
 
             _cachedPlayer = player;
             _cachedCamera = Camera.main;
             _cachedCanvas = gameObject.GetComponentInParent<Canvas>();
 
-            // register events on player
-            player.OnHandsControllerChanged += OnHandControllerChanged;
-            player.OnSenseChanged += OnSenseChanged;
-            player.PossibleInteractionsChanged += PossibleInteractionsChanged;
+            // register events on player, il2cpp events need il2cpp delegates
+            _handsControllerChangedHandler ??= (Action<Player.AbstractHandsController, Player.AbstractHandsController>)OnHandControllerChanged;
+            _senseChangedHandler ??= (Action<bool>)OnSenseChanged;
+            _possibleInteractionsChangedHandler ??= (Action)PossibleInteractionsChanged;
+
+            player.add_OnHandsControllerChanged(_handsControllerChangedHandler);
+            player.add_OnSenseChanged(_senseChangedHandler);
+            player.add_PossibleInteractionsChanged(_possibleInteractionsChangedHandler);
 
             // we may have missed initial event, so call it now
             OnHandControllerChanged(null, player.HandsController);
@@ -332,26 +444,47 @@ namespace SimpleCrosshair
             ReadConfig();
         }
 
+        [HideFromIl2Cpp]
         internal void OnUnregisterMainPlayer()
         {
-            if (!GameUtils.IsGameActive) return;
-            var player = GameUtils.Player;
+            // use unity's null check, the player may have already been destroyed
+            if (_cachedPlayer == null) return;
 
+            UnsubscribeFromPlayer(_cachedPlayer);
+            _cachedPlayer = null;
+            _cachedFirearmController = null;
+        }
+
+        [HideFromIl2Cpp]
+        private void UnsubscribeFromPlayer(Player player)
+        {
             // unregister events on player
-            player.OnHandsControllerChanged -= OnHandControllerChanged;
-            player.OnSenseChanged -= OnSenseChanged;
-            player.PossibleInteractionsChanged += PossibleInteractionsChanged;
+            if (_handsControllerChangedHandler != null)
+            {
+                player.remove_OnHandsControllerChanged(_handsControllerChangedHandler);
+            }
+
+            if (_senseChangedHandler != null)
+            {
+                player.remove_OnSenseChanged(_senseChangedHandler);
+            }
+
+            if (_possibleInteractionsChangedHandler != null)
+            {
+                player.remove_PossibleInteractionsChanged(_possibleInteractionsChangedHandler);
+            }
 
             // unregister from hands controller if there is one
             OnHandControllerChanged(player.HandsController, null);
         }
 
+        [HideFromIl2Cpp]
         private void OnHandControllerChanged(Player.AbstractHandsController oldController,
                                              Player.AbstractHandsController newController)
         {
-            if (oldController != null)
+            if (oldController != null && _aimingChangedHandler != null)
             {
-                oldController.OnAimingChanged -= OnAimingChanged;
+                oldController.remove_OnAimingChanged(_aimingChangedHandler);
             }
 
             if (newController == null)
@@ -359,35 +492,42 @@ namespace SimpleCrosshair
                 return;
             }
 
-            newController.OnAimingChanged += OnAimingChanged;
+            _aimingChangedHandler ??= (Action<bool>)OnAimingChanged;
+            newController.add_OnAimingChanged(_aimingChangedHandler);
 
             // check if controller is one that we want to show a crosshair for
-            SetReasonToHide("handController", !HandControllersToShowWith.Any(c =>
-                c.IsAssignableFrom(newController.GetType())));
+            SetReasonToHide("handController", !HandControllersToShowWith.Any(isController => isController(newController)));
 
-            _cachedFirearmController = (newController is Player.FirearmController)
-                ? newController as Player.FirearmController
-                : null;
+            _cachedFirearmController = newController.TryCast<Player.FirearmController>();
         }
 
+        [HideFromIl2Cpp]
         private void OnAimingChanged(bool isAiming)
         {
             SetReasonToHide("aiming", isAiming);
         }
 
+        [HideFromIl2Cpp]
         private void OnSenseChanged(bool sensingItem)
         {
             SetReasonToHide("sensing", sensingItem);
         }
 
+        [HideFromIl2Cpp]
         internal void OnMovementStateChanged(EPlayerState state)
         {
             SetReasonToHide("movementState", PlayerStatesToHideWith.Contains(state));
         }
 
+        [HideFromIl2Cpp]
         private void PossibleInteractionsChanged()
         {
-            SetReasonToHide("interactableObject", GameUtils.Player.InteractableObject != null);
+            SetReasonToHide("interactableObject", _cachedPlayer != null && _cachedPlayer.InteractableObject != null);
+        }
+
+        public void OnDestroy()
+        {
+            OnUnregisterMainPlayer();
         }
     }
 }

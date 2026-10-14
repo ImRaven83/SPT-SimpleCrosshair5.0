@@ -1,7 +1,7 @@
 using System.Reflection;
 using EFT;
 using HarmonyLib;
-using SPT.Reflection.Patching;
+using SPTushonka.Reflection.Patching;
 
 namespace SimpleCrosshair.Patches
 {
@@ -15,7 +15,10 @@ namespace SimpleCrosshair.Patches
         [PatchPostfix]
         public static void PatchPostfix(MovementContext __instance)
         {
-            if (__instance != GameUtils.Player.MovementContext)
+            // il2cpp wrappers aren't guaranteed to be the same managed object, so compare native pointers
+            var player = GameUtils.Player;
+            if (player == null || player.MovementContext == null ||
+                __instance.Pointer != player.MovementContext.Pointer)
             {
                 return;
             }

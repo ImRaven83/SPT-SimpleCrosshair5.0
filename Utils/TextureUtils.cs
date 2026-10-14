@@ -13,7 +13,10 @@ namespace SimpleCrosshair.Utils
             }
 
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-            tex.LoadImage(File.ReadAllBytes(path));
+            ImageConversion.LoadImage(tex, File.ReadAllBytes(path));
+
+            // don't let unity unload the texture on scene changes, we cache it
+            tex.hideFlags = HideFlags.DontUnloadUnusedAsset;
 
             return tex;
         }
