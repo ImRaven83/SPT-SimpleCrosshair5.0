@@ -21,7 +21,7 @@
     <TarkovDir Condition=" '$(TarkovDir)' == '' ">..\..\</TarkovDir>
     <TarkovBepInExCoreDir Condition=" '$(TarkovBepInExCoreDir)' == '' ">$(TarkovDir)BepInEx\core\</TarkovBepInExCoreDir>
     <TarkovInteropDir Condition=" '$(TarkovInteropDir)' == '' ">$(TarkovDir)BepInEx\interop\</TarkovInteropDir>
-    <TarkovBepInExSptDir Condition=" '$(TarkovBepInExSptDir)' == '' ">$(TarkovDir)BepInEx\plugins\spt\</TarkovBepInExSptDir>
+    <TarkovBepInExSptDir Condition=" '$(TarkovBepInExSptDir)' == '' ">$(TarkovDir)BepInEx\plugins\sptushonka\</TarkovBepInExSptDir>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
