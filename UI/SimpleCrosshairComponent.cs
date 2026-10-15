@@ -398,7 +398,8 @@ namespace SimpleCrosshair
             {
                 _nextDynamicDebugLogTime = Time.unscaledTime + 1f;
                 DebugLog($"Dynamic aim: firearm={(_cachedFirearmController != null)} hit={didRayHit} " +
-                         $"screenAimPoint={screenAimPoint} canvas={(_cachedCanvas != null)} camera={(_cachedCamera != null)}");
+                         $"screenAimPoint={screenAimPoint} canvas={(_cachedCanvas != null ? _cachedCanvas.renderMode.ToString() : "none")} " +
+                         $"camera={(_cachedCamera != null ? _cachedCamera.name : "none")}");
             }
 
             // move the anchor position of the cursor to the aim point
@@ -447,12 +448,26 @@ namespace SimpleCrosshair
         }
 
         [HideFromIl2Cpp]
+        private static Camera FindPlayerCamera()
+        {
+            var camera = Camera.main;
+            if (camera != null)
+            {
+                return camera;
+            }
+
+            // fall back to the first person camera by name, in case it isn't tagged as the main camera
+            var cameraGO = GameObject.Find("FPS Camera");
+            return cameraGO != null ? cameraGO.GetComponent<Camera>() : null;
+        }
+
+        [HideFromIl2Cpp]
         private Vector2 GetCanvasScreenPosition(Vector3 worldPoint)
         {
             // the camera may not exist yet when the player is registered during spawn, so refresh lazily
             if (_cachedCamera == null || !_cachedCamera.isActiveAndEnabled)
             {
-                _cachedCamera = Camera.main;
+                _cachedCamera = FindPlayerCamera();
             }
 
             if (_cachedCanvas == null)
@@ -465,14 +480,33 @@ namespace SimpleCrosshair
                 return Vector2.zero;
             }
 
-            var canvasTransform = _cachedCanvas.GetRectTransform();
-            var canvasRect = canvasTransform.parent != null
-                ? canvasTransform.parent.GetRectTransform() ?? canvasTransform // Workaround to get a valid sizeDelta
-                : canvasTransform;
+            // project into screen space, mirroring points behind the camera so they end up off screen
+            var screenPoint = _cachedCamera.WorldToScreenPoint(worldPoint);
+            if (screenPoint.z < 0f)
+            {
+                screenPoint = new Vector3(Screen.width - screenPoint.x, Screen.height - screenPoint.y, 0f);
+            }
+
+            // convert into the local space of our parent, which is what anchoredPosition is relative to,
+            // this works regardless of canvas render mode, scaling or how the parent is sized
+            var parentRect = transform.parent != null ? transform.parent.GetRectTransform() : null;
+            if (parentRect != null)
+            {
+                var uiCamera = _cachedCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : _cachedCanvas.worldCamera;
+                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(parentRect, new Vector2(screenPoint.x, screenPoint.y),
+                                                                            uiCamera, out var localPoint))
+                {
+                    // our anchors are at the center of the parent rect
+                    return localPoint - parentRect.rect.center;
+                }
+            }
+
+            // fallback, scale the viewport point by the canvas size
+            var canvasRect = _cachedCanvas.GetRectTransform();
             var viewportPoint = _cachedCamera.WorldToViewportPoint(worldPoint);
             return new Vector2(
-                (viewportPoint.x * canvasRect.sizeDelta.x) - (canvasRect.sizeDelta.x * 0.5f),
-                (viewportPoint.y * canvasRect.sizeDelta.y) - (canvasRect.sizeDelta.y * 0.5f));
+                (viewportPoint.x - 0.5f) * canvasRect.rect.width,
+                (viewportPoint.y - 0.5f) * canvasRect.rect.height);
         }
 
         [HideFromIl2Cpp]
@@ -489,7 +523,7 @@ namespace SimpleCrosshair
             }
 
             _cachedPlayer = player;
-            _cachedCamera = Camera.main;
+            _cachedCamera = FindPlayerCamera();
             _cachedCanvas = gameObject.GetComponentInParent<Canvas>();
 
             // register events on player, il2cpp events need il2cpp delegates
