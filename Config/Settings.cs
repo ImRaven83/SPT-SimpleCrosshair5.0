@@ -35,6 +35,9 @@ namespace SimpleCrosshair.Config
         public static ConfigEntry<KeyboardShortcut> KeyboardShortcut;
         public static ConfigEntry<EKeybindBehavior> KeybindBehavior;
 
+        public const string DebugTitle = "4. Debug";
+        public static ConfigEntry<bool> DebugLogging;
+
         public static void Init(ConfigFile Config)
         {
             Settings.Config = Config;
@@ -174,6 +177,15 @@ namespace SimpleCrosshair.Config
                     "What the keybind should do when pressed",
                     null,
                     new ConfigurationManagerAttributes { })));
+
+            ConfigEntries.Add(DebugLogging = Config.Bind(
+                DebugTitle,
+                "Debug Logging",
+                false,
+                new ConfigDescription(
+                    "Log what the crosshair is reacting to (hands, aiming, hide reasons, dynamic position) to the BepInEx log",
+                    null,
+                    new ConfigurationManagerAttributes { IsAdvanced = true })));
 
             RecalcOrder();
         }

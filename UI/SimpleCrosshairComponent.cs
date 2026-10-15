@@ -90,8 +90,20 @@ namespace SimpleCrosshair
         private Vector2 _targetAnchorPosition;
         private Vector2 _anchorPositionVelocity;
 
+        // debug logging
+        private float _nextDynamicDebugLogTime;
+
         public SimpleCrosshairComponent(IntPtr pointer) : base(pointer)
         {
+        }
+
+        [HideFromIl2Cpp]
+        private static void DebugLog(string message)
+        {
+            if (Settings.DebugLogging != null && Settings.DebugLogging.Value)
+            {
+                Plugin.Logger.LogInfo($"[Debug] {message}");
+            }
         }
 
         [HideFromIl2Cpp]
@@ -188,7 +200,16 @@ namespace SimpleCrosshair
                 return;
             }
 
-            CalculateDynamicAimPoint();
+            try
+            {
+                CalculateDynamicAimPoint();
+            }
+            catch (Exception e)
+            {
+                // exceptions thrown into il2cpp can get swallowed, so make sure they show up in the log
+                Plugin.Logger.LogError($"Dynamic crosshair position failed: {e}");
+                _useDynamicPosition = false;
+            }
         }
 
         [HideFromIl2Cpp]
@@ -240,6 +261,10 @@ namespace SimpleCrosshair
             _reasonsToHide["centerRadius"] = false;
             SetVisibility(_visible, force: true);
 
+            DebugLog($"ReadConfig: image={_currentImage} size={Settings.Size.Value} color={_color} show={Settings.Show.Value} " +
+                     $"dynamic={_useDynamicPosition} centerRadius={_centerRadiusBehavior}/{_centerRadius} " +
+                     $"keybind={_keyboardShortcut}/{_keybindBehavior} player={(_cachedPlayer != null)}");
+
             if (_useDynamicPosition)
             {
                 CalculateDynamicAimPoint(false);
@@ -249,6 +274,11 @@ namespace SimpleCrosshair
         [HideFromIl2Cpp]
         public void SetReasonToHide(string reason, bool shouldHide)
         {
+            if (!_reasonsToHide.TryGetValue(reason, out var previous) || previous != shouldHide)
+            {
+                DebugLog($"Hide reason '{reason}' = {shouldHide}");
+            }
+
             _reasonsToHide[reason] = shouldHide;
             SetVisibility(!_reasonsToHide.Any((pair) => pair.Value));
         }
@@ -343,11 +373,15 @@ namespace SimpleCrosshair
                 return;
             }
 
-            var rayBegin = _cachedFirearmController != null
-                ? _cachedFirearmController.CurrentFireport.position
+            // the fireport can be missing while a weapon is being swapped, fall back to the camera then
+            var fireport = _cachedFirearmController != null ? _cachedFirearmController.CurrentFireport : null;
+            var useFireport = fireport != null;
+
+            var rayBegin = useFireport
+                ? fireport.position
                 : _cachedPlayer.CameraPosition.position;
 
-            var rayDirection = _cachedFirearmController != null
+            var rayDirection = useFireport
                 ? _cachedFirearmController.WeaponDirection
                 : _cachedPlayer.LookDirection;
 
@@ -359,6 +393,13 @@ namespace SimpleCrosshair
 
             var worldAimPoint = didRayHit ? rayHit.point : rayEnd;
             var screenAimPoint = GetCanvasScreenPosition(worldAimPoint);
+
+            if (Time.unscaledTime >= _nextDynamicDebugLogTime)
+            {
+                _nextDynamicDebugLogTime = Time.unscaledTime + 1f;
+                DebugLog($"Dynamic aim: firearm={(_cachedFirearmController != null)} hit={didRayHit} " +
+                         $"screenAimPoint={screenAimPoint} canvas={(_cachedCanvas != null)} camera={(_cachedCamera != null)}");
+            }
 
             // move the anchor position of the cursor to the aim point
             // check visibility status before tweening so that if the player can't see it, it doesn't tween
@@ -408,7 +449,26 @@ namespace SimpleCrosshair
         [HideFromIl2Cpp]
         private Vector2 GetCanvasScreenPosition(Vector3 worldPoint)
         {
-            var canvasRect = _cachedCanvas.GetRectTransform().parent.GetRectTransform(); // Workaround to get a valid sizeDelta
+            // the camera may not exist yet when the player is registered during spawn, so refresh lazily
+            if (_cachedCamera == null || !_cachedCamera.isActiveAndEnabled)
+            {
+                _cachedCamera = Camera.main;
+            }
+
+            if (_cachedCanvas == null)
+            {
+                _cachedCanvas = gameObject.GetComponentInParent<Canvas>();
+            }
+
+            if (_cachedCamera == null || _cachedCanvas == null)
+            {
+                return Vector2.zero;
+            }
+
+            var canvasTransform = _cachedCanvas.GetRectTransform();
+            var canvasRect = canvasTransform.parent != null
+                ? canvasTransform.parent.GetRectTransform() ?? canvasTransform // Workaround to get a valid sizeDelta
+                : canvasTransform;
             var viewportPoint = _cachedCamera.WorldToViewportPoint(worldPoint);
             return new Vector2(
                 (viewportPoint.x * canvasRect.sizeDelta.x) - (canvasRect.sizeDelta.x * 0.5f),
@@ -499,6 +559,8 @@ namespace SimpleCrosshair
             {
                 return;
             }
+
+            DebugLog($"Hands controller changed to {newController.GetIl2CppType().FullName}");
 
             _aimingChangedHandler ??= (Action<bool>)OnAimingChanged;
             newController.add_OnAimingChanged(_aimingChangedHandler);
