@@ -145,6 +145,12 @@ namespace SimpleCrosshair
 
         public void Update()
         {
+            // the register player patches aren't guaranteed to fire under il2cpp, so pick up the player if we missed it
+            if (_cachedPlayer == null && GameUtils.IsGameActive && GameUtils.Player != null)
+            {
+                OnRegisterMainPlayer();
+            }
+
             UpdateFade();
             UpdateDynamicPosition();
 
@@ -440,6 +446,8 @@ namespace SimpleCrosshair
 
             // clear all reasons to hide, since we're resetting the player
             _reasonsToHide.Clear();
+
+            Plugin.Logger.LogInfo("Registered main player with crosshair");
 
             ReadConfig();
         }

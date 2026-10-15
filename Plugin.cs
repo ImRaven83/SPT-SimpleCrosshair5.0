@@ -36,6 +36,8 @@ namespace SimpleCrosshair
             new PlayerLookPatch().Enable();
             new GameWorldRegisterPlayerPatch().Enable();
             new GameWorldUnregisterPlayerPatch().Enable();
+            new ClientGameWorldRegisterPlayerPatch().Enable();
+            new ClientGameWorldUnregisterPlayerPatch().Enable();
             new GesturesMenuShowPatch().Enable();
             new GesturesMenuClosePatch().Enable();
             new MovementContextProcessStateEnterPatch().Enable();
@@ -60,6 +62,7 @@ namespace SimpleCrosshair
 
             SimpleCrosshairGO = SimpleCrosshairComponent.AttachToBattleUIScreen(screen);
             SimpleCrosshairComponent = SimpleCrosshairGO.GetComponent<SimpleCrosshairComponent>();
+            Log.LogInfo("Attached crosshair to battle UI screen");
         }
 
         /// <summary>
